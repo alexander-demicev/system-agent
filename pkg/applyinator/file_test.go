@@ -1,5 +1,3 @@
-//go:build !arm64
-
 package applyinator
 
 import (
@@ -7,374 +5,236 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestWriteContentToFile(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
+var _ = Describe("File Operations", func() {
+	var tempDir string
 
-	getFile := func(path string, permissions string, content string) File {
-		return File{
-			Content:     content,
-			UID:         -1,
-			GID:         -1,
-			Path:        filepath.Join(tempDir, path),
-			Permissions: permissions,
-		}
-	}
+	BeforeEach(func() {
+		var err error
+		tempDir, err = os.MkdirTemp("", "")
+		Expect(err).ToNot(HaveOccurred())
+	})
 
-	testCases := []struct {
-		Path        string
-		Permissions string
-		Content     string
+	AfterEach(func() {
+		os.RemoveAll(tempDir)
+	})
 
-		Base64Encode bool
-
-		ExpectedPermissions os.FileMode
-		ExpectedErr         bool
-	}{
-		{
-			Path:    "test-no-perms",
-			Content: "hello world",
-
-			ExpectedPermissions: defaultFilePermissions,
-			ExpectedErr:         false,
-		},
-		{
-			Path:        "test-perms",
-			Permissions: "0666",
-			Content:     "hello world 2",
-
-			ExpectedPermissions: 0666,
-			ExpectedErr:         false,
-		},
-		{
-			Path:    "test-invalid-base64",
-			Content: "not base64 content",
-
-			Base64Encode: true,
-
-			ExpectedErr: true,
-		},
-		{
-			Path:    "test-no-perms-base64",
-			Content: "aGVsbG8gd29ybGQ=",
-
-			Base64Encode: true,
-
-			ExpectedPermissions: defaultFilePermissions,
-			ExpectedErr:         false,
-		},
-		{
-			Path:        "test-perms-base64",
-			Permissions: "0666",
-			Content:     "aGVsbG8gd29ybGQ=",
-
-			Base64Encode: true,
-
-			ExpectedPermissions: 0666,
-			ExpectedErr:         false,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.Path, func(t *testing.T) {
-			f := getFile(tc.Path, tc.Permissions, tc.Content)
-			t.Run("Create File", func(t *testing.T) {
-				var err error
-				if tc.Base64Encode {
-					err = writeBase64ContentToFile(f)
-				} else {
-					var perms os.FileMode
-					perms, err = parsePerm(f.Permissions)
-					if err != nil && f.Permissions != "" {
-						t.Fatalf("invalid permissions provided: %s", f.Permissions)
-					}
-					err = writeContentToFile(f.Path, f.UID, f.GID, perms, []byte(f.Content))
-				}
-				if tc.ExpectedErr {
-					if err == nil {
-						t.Error("expected error, returned successfully")
-					}
-					return
-				}
-				if err != nil {
-					t.Error(err)
-					return
-				}
-			})
-			if tc.ExpectedErr {
-				// no need to run any further tests if file was never created
-				return
+	Describe("WriteContentToFile", func() {
+		var getFile = func(path string, permissions string, content string) File {
+			return File{
+				Content:     content,
+				UID:         -1,
+				GID:         -1,
+				Path:        filepath.Join(tempDir, path),
+				Permissions: permissions,
 			}
-			t.Run("Read File", func(t *testing.T) {
+		}
+
+		Context("with no permissions specified", func() {
+			It("should create file with default permissions", func() {
+				f := getFile("test-no-perms", "", "hello world")
+				perms, err := parsePerm(f.Permissions)
+				Expect(err).To(HaveOccurred())
+				err = writeContentToFile(f.Path, f.UID, f.GID, perms, []byte(f.Content))
+				Expect(err).ToNot(HaveOccurred())
+
 				content, err := os.ReadFile(f.Path)
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				decoded := []byte(tc.Content)
-				if tc.Base64Encode {
-					decoded, err = base64.StdEncoding.DecodeString(tc.Content)
-					if err != nil {
-						t.Error(err)
-						return
-					}
-				}
+				Expect(err).ToNot(HaveOccurred())
+				Expect(content).To(Equal([]byte("hello world")))
 
-				if !reflect.DeepEqual(content, decoded) {
-					t.Errorf("expected %s, found %s", tc.Content, content)
-					return
-				}
-			})
-			t.Run("Check Permissions", func(t *testing.T) {
-				if runtime.GOOS == "windows" {
-					t.Skip("cannot get permissions on Windows")
-				}
-				permissions, err := getPermissions(f.Path)
-				if err != nil {
-					t.Error(err)
-				}
-				if permissions != tc.ExpectedPermissions {
-					t.Errorf("expected permissions %v, found %v", tc.ExpectedPermissions, permissions)
+				if runtime.GOOS != "windows" {
+					permissions, err := getPermissions(f.Path)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(permissions).To(Equal(defaultFilePermissions))
 				}
 			})
 		})
-	}
-}
 
-func TestCreateDirectory(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
+		Context("with custom permissions", func() {
+			It("should create file with specified permissions", func() {
+				f := getFile("test-perms", "0666", "hello world 2")
+				perms, err := parsePerm(f.Permissions)
+				Expect(err).ToNot(HaveOccurred())
+				err = writeContentToFile(f.Path, f.UID, f.GID, perms, []byte(f.Content))
+				Expect(err).ToNot(HaveOccurred())
 
-	getFile := func(path string, permissions string) File {
-		return File{
-			Directory:   true,
-			UID:         -1,
-			GID:         -1,
-			Path:        filepath.Join(tempDir, path),
-			Permissions: permissions,
+				content, err := os.ReadFile(f.Path)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(content).To(Equal([]byte("hello world 2")))
+				if runtime.GOOS != "windows" {
+					permissions, err := getPermissions(f.Path)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(permissions).To(Equal(os.FileMode(0666)))
+				}
+			})
+		})
+
+		Context("with base64 encoded content", func() {
+			It("should fail with invalid base64", func() {
+				f := getFile("test-invalid-base64", "", "not base64 content")
+				err := writeBase64ContentToFile(f)
+				Expect(err).To(HaveOccurred())
+			})
+
+			It("should decode and write base64 content with default permissions", func() {
+				f := getFile("test-no-perms-base64", "", "aGVsbG8gd29ybGQ=")
+				err := writeBase64ContentToFile(f)
+				Expect(err).ToNot(HaveOccurred())
+
+				content, err := os.ReadFile(f.Path)
+				Expect(err).ToNot(HaveOccurred())
+				decoded, err := base64.StdEncoding.DecodeString("aGVsbG8gd29ybGQ=")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(content).To(Equal(decoded))
+
+				if runtime.GOOS != "windows" {
+					permissions, err := getPermissions(f.Path)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(permissions).To(Equal(defaultFilePermissions))
+				}
+			})
+
+			It("should decode and write base64 content with custom permissions", func() {
+				f := getFile("test-perms-base64", "0666", "aGVsbG8gd29ybGQ=")
+				err := writeBase64ContentToFile(f)
+				Expect(err).ToNot(HaveOccurred())
+
+				content, err := os.ReadFile(f.Path)
+				Expect(err).ToNot(HaveOccurred())
+				decoded, err := base64.StdEncoding.DecodeString("aGVsbG8gd29ybGQ=")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(content).To(Equal(decoded))
+
+				if runtime.GOOS != "windows" {
+					permissions, err := getPermissions(f.Path)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(permissions).To(Equal(os.FileMode(0666)))
+				}
+			})
+		})
+	})
+
+	Describe("CreateDirectory", func() {
+		var getFile = func(path string, permissions string) File {
+			return File{
+				Directory:   true,
+				UID:         -1,
+				GID:         -1,
+				Path:        filepath.Join(tempDir, path),
+				Permissions: permissions,
+			}
 		}
-	}
 
-	testCases := []struct {
-		Path        string
-		Permissions string
-
-		ExpectedPermissions os.FileMode
-		ExpectedErr         bool
-	}{
-		{
-			Path: "test-no-perms",
-
-			ExpectedPermissions: fs.ModeDir | defaultDirectoryPermissions,
-			ExpectedErr:         false,
-		},
-		{
-			Path:        "test-perms",
-			Permissions: "0777",
-
-			ExpectedPermissions: fs.ModeDir | 0777,
-			ExpectedErr:         false,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.Path, func(t *testing.T) {
-			f := getFile(tc.Path, tc.Permissions)
-			t.Run("Create Directory", func(t *testing.T) {
+		Context("with no permissions specified", func() {
+			It("should create directory with default permissions", func() {
+				f := getFile("test-no-perms", "")
 				err := createDirectory(f)
-				if tc.ExpectedErr {
-					if err == nil {
-						t.Error("expected error, returned successfully")
-					}
-					return
-				}
-				if err != nil {
-					t.Error(err)
-				}
-			})
-			t.Run("Check Permissions", func(t *testing.T) {
-				if runtime.GOOS == "windows" {
-					t.Skip("cannot get permissions on Windows")
-				}
-				permissions, err := getPermissions(f.Path)
-				if err != nil {
-					t.Error(err)
-				}
-				if permissions != tc.ExpectedPermissions {
-					t.Errorf("expected permissions %v, found %v", tc.ExpectedPermissions, permissions)
+				Expect(err).ToNot(HaveOccurred())
+
+				if runtime.GOOS != "windows" {
+					permissions, err := getPermissions(f.Path)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(permissions).To(Equal(fs.ModeDir | defaultDirectoryPermissions))
 				}
 			})
 		})
-	}
-}
 
-func TestParsePerm(t *testing.T) {
-	testCases := []struct {
-		Permissions string
+		Context("with custom permissions", func() {
+			It("should create directory with specified permissions", func() {
+				f := getFile("test-perms", "0777")
+				err := createDirectory(f)
+				Expect(err).ToNot(HaveOccurred())
 
-		ExpectedPermissions os.FileMode
-		ExpectedErr         bool
-	}{
-		{
-			Permissions: "0777",
-
-			ExpectedPermissions: 0777,
-			ExpectedErr:         false,
-		},
-		{
-			Permissions: "0007",
-
-			ExpectedPermissions: 0007,
-			ExpectedErr:         false,
-		},
-		{
-			Permissions: "0070",
-
-			ExpectedPermissions: 0070,
-			ExpectedErr:         false,
-		},
-		{
-			Permissions: "0700",
-
-			ExpectedPermissions: 0700,
-			ExpectedErr:         false,
-		},
-		{
-			Permissions: "0333",
-
-			ExpectedPermissions: 0333,
-			ExpectedErr:         false,
-		},
-		{
-			Permissions: "0003",
-
-			ExpectedPermissions: 0003,
-			ExpectedErr:         false,
-		},
-		{
-			Permissions: "0030",
-
-			ExpectedPermissions: 0030,
-			ExpectedErr:         false,
-		},
-		{
-			Permissions: "0300",
-
-			ExpectedPermissions: 0300,
-			ExpectedErr:         false,
-		},
-		{
-			Permissions: "",
-			ExpectedErr: true,
-		},
-	}
-
-	for _, tc := range testCases {
-		testName := tc.Permissions
-		if len(testName) == 0 {
-			testName = "Empty String"
-		}
-		t.Run(testName, func(t *testing.T) {
-			fileMode, err := parsePerm(tc.Permissions)
-			if tc.ExpectedErr {
-				if err == nil {
-					t.Error("expected error, returned successfully")
+				if runtime.GOOS != "windows" {
+					permissions, err := getPermissions(f.Path)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(permissions).To(Equal(fs.ModeDir | os.FileMode(0777)))
 				}
-				return
-			}
-			if err != nil {
-				t.Error(err)
-			}
-			if fileMode != tc.ExpectedPermissions {
-				t.Errorf("expected filemode %v, found %v", tc.ExpectedPermissions, fileMode)
-			}
+			})
 		})
-	}
-}
+	})
 
-func TestFileActionDelete(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "test-removedir-")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	Describe("ParsePerm", func() {
+		DescribeTable("parsing permission strings",
+			func(permissions string, expectedPerms os.FileMode, expectErr bool) {
+				fileMode, err := parsePerm(permissions)
+				if expectErr {
+					Expect(err).To(HaveOccurred())
+				} else {
+					Expect(err).ToNot(HaveOccurred())
+					Expect(fileMode).To(Equal(expectedPerms))
+				}
+			},
+			Entry("should parse 0777", "0777", os.FileMode(0777), false),
+			Entry("should parse 0007", "0007", os.FileMode(0007), false),
+			Entry("should parse 0070", "0070", os.FileMode(0070), false),
+			Entry("should parse 0700", "0700", os.FileMode(0700), false),
+			Entry("should parse 0333", "0333", os.FileMode(0333), false),
+			Entry("should parse 0003", "0003", os.FileMode(0003), false),
+			Entry("should parse 0030", "0030", os.FileMode(0030), false),
+			Entry("should parse 0300", "0300", os.FileMode(0300), false),
+			Entry("should error on empty string", "", os.FileMode(0), true),
+		)
+	})
 
-	getFile := func(path string, isDir bool) File {
-		return File{
-			Path:      filepath.Join(tempDir, path),
-			Directory: isDir,
-			Action:    deleteFileAction,
+	Describe("FileActionDelete", func() {
+		var getFile = func(path string, isDir bool) File {
+			return File{
+				Path:      filepath.Join(tempDir, path),
+				Directory: isDir,
+				Action:    deleteFileAction,
+			}
 		}
-	}
 
-	testCases := []struct {
-		Name      string
-		Setup     func(path string) error
-		Path      string
-		Directory bool
-	}{
-		{
-			Name: "Existing directory",
-			Setup: func(path string) error {
-				return os.Mkdir(path, defaultDirectoryPermissions)
-			},
-			Path:      "existing-dir",
-			Directory: true,
-		},
-		{
-			Name: "Missing directory",
-			Setup: func(_ string) error {
-				return nil
-			},
-			Path:      "missing-dir",
-			Directory: true,
-		},
-		{
-			Name: "Existing file",
-			Setup: func(path string) error {
-				return os.WriteFile(path, []byte("t"), defaultFilePermissions)
-			},
-			Path: "existing-file",
-		},
-		{
-			Name: "Missing file",
-			Setup: func(_ string) error {
-				return nil
-			},
-			Path: "missing-file",
-		},
-	}
+		Context("when deleting existing directory", func() {
+			It("should successfully remove the directory", func() {
+				dirPath := filepath.Join(tempDir, "existing-dir")
+				err := os.Mkdir(dirPath, defaultDirectoryPermissions)
+				Expect(err).ToNot(HaveOccurred())
 
-	for _, tc := range testCases {
-		t.Run(tc.Name, func(t *testing.T) {
-			fullPath := filepath.Join(tempDir, tc.Path)
-			if err := tc.Setup(fullPath); err != nil {
-				t.Errorf("Setup failed for %s: %v", tc.Name, err)
-				return
-			}
+				f := getFile("existing-dir", true)
+				err = removeFile(f)
+				Expect(err).ToNot(HaveOccurred())
 
-			f := getFile(tc.Path, tc.Directory)
-
-			if err := removeFile(f); err != nil {
-				t.Errorf("Error deleting file for %s: %v", tc.Name, err)
-			}
-
-			if _, err := os.Stat(fullPath); err == nil {
-				t.Errorf("Path still exists after deletion: %s", fullPath)
-			} else if !os.IsNotExist(err) {
-				t.Errorf("Expected '%s' to be deleted, but os.Stat returned unexpected error: %v", tc.Name, err)
-			}
+				_, err = os.Stat(dirPath)
+				Expect(os.IsNotExist(err)).To(BeTrue())
+			})
 		})
-	}
-}
+
+		Context("when deleting missing directory", func() {
+			It("should not return error", func() {
+				f := getFile("missing-dir", true)
+				err := removeFile(f)
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+
+		Context("when deleting existing file", func() {
+			It("should successfully remove the file", func() {
+				filePath := filepath.Join(tempDir, "existing-file")
+				err := os.WriteFile(filePath, []byte("t"), defaultFilePermissions)
+				Expect(err).ToNot(HaveOccurred())
+
+				f := getFile("existing-file", false)
+				err = removeFile(f)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = os.Stat(filePath)
+				Expect(os.IsNotExist(err)).To(BeTrue())
+			})
+		})
+
+		Context("when deleting missing file", func() {
+			It("should not return error", func() {
+				f := getFile("missing-file", false)
+				err := removeFile(f)
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+	})
+})

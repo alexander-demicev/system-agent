@@ -62,6 +62,11 @@ GOLANGCI_LINT_BIN := golangci-lint
 GOLANGCI_LINT := $(abspath $(TOOLS_BIN_DIR)/$(GOLANGCI_LINT_BIN)-$(GOLANGCI_LINT_VER))
 GOLANGCI_LINT_PKG := github.com/golangci/golangci-lint/cmd/golangci-lint
 
+SETUP_ENVTEST_VER := latest
+SETUP_ENVTEST_BIN := setup-envtest
+SETUP_ENVTEST := $(abspath $(TOOLS_BIN_DIR)/$(SETUP_ENVTEST_BIN))
+SETUP_ENVTEST_PKG := sigs.k8s.io/controller-runtime/tools/setup-envtest
+
 GO_INSTALL := ./scripts/go-install.sh
 
 # Version information
@@ -187,9 +192,14 @@ verify-gen: generate ## Verify go generated files are up to date
 
 ##@ Testing
 
+# Test configuration
+KUBEBUILDER_ENVTEST_KUBERNETES_VERSION ?= 1.34.x
+KUBEBUILDER_ASSETS ?= $(shell $(SETUP_ENVTEST) use --use-env -p path $(KUBEBUILDER_ENVTEST_KUBERNETES_VERSION))
+TEST_ARGS ?=
+
 .PHONY: test
-test: ## Run tests
-	go test -cover -tags=test ./...
+test: $(SETUP_ENVTEST) ## Run all tests
+	KUBEBUILDER_ASSETS="$(KUBEBUILDER_ASSETS)" go test ./... $(TEST_ARGS)
 
 ##@ Build
 
@@ -286,8 +296,14 @@ clean-all: clean vendor-clean ## Clean everything including vendor
 .PHONY: $(GOLANGCI_LINT_BIN)
 $(GOLANGCI_LINT_BIN): $(GOLANGCI_LINT) ## Build a local copy of golangci-lint
 
+.PHONY: $(SETUP_ENVTEST_BIN)
+$(SETUP_ENVTEST_BIN): $(SETUP_ENVTEST) ## Build a local copy of setup-envtest
+
 $(GOLANGCI_LINT): $(TOOLS_BIN_DIR) ## Build golangci-lint from tools folder
 	GOOS= GOARCH= GOBIN=$(TOOLS_BIN_DIR) $(GO_INSTALL) $(GOLANGCI_LINT_PKG) $(GOLANGCI_LINT_BIN) $(GOLANGCI_LINT_VER)
+
+$(SETUP_ENVTEST): $(TOOLS_BIN_DIR) ## Build setup-envtest from tools folder
+	GOBIN=$(TOOLS_BIN_DIR) go install $(SETUP_ENVTEST_PKG)@$(SETUP_ENVTEST_VER)
 
 .PHONY: version
 version: ## Display version information
